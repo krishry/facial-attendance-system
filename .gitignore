@@ -68,6 +68,8 @@ Thumbs.db
 
 # Machine Learning & AI Artifacts
 models/
+!backend/app/db/models/
+!backend/app/db/models/*.py
 weights/
 *.onnx
 *.engine
