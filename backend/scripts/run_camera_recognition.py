@@ -22,7 +22,7 @@ from app.camera.pipeline import CameraRecognitionPipeline
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.db.models.student import Student
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, async_engine
 from app.schemas.attendance import AttendanceMarkRequest, AttendanceStatus
 from app.services.attendance_service import AttendanceService
 from app.services.matching_service import get_identity_matching_service
@@ -44,11 +44,12 @@ async def record_attendance_event(
     obs_count: int,
     is_live: Optional[bool] = None,
     liveness_score: Optional[float] = None,
-) -> None:
-    """Record verified attendance asynchronously via AttendanceService."""
+) -> bool:
+    """Record verified attendance and commit it to the database."""
     try:
         async with AsyncSessionLocal() as db:
             service = AttendanceService(db=db)
+
             req = AttendanceMarkRequest(
                 session_id=session_id,
                 student_id=student_id,
@@ -58,15 +59,40 @@ async def record_attendance_event(
                 is_live=is_live,
                 liveness_score=liveness_score,
             )
+
             res = await service.mark_attendance(req)
+
             if res.status == AttendanceStatus.PRESENT:
-                print(f"\n>>> [ATTENDANCE SUCCESS] {res.student_name} ({res.student_id}) marked PRESENT in session '{session_id}' <<<\n")
+                await db.commit()
+
+                print(
+                    f"\n>>> [ATTENDANCE SUCCESS] {res.student_name} "
+                    f"({res.student_id}) marked PRESENT "
+                    f"in session '{session_id}' <<<\n"
+                )
+                return True
+
             elif res.status == AttendanceStatus.ALREADY_MARKED:
-                pass  # Gracefully ignore already marked
+                return True
+
             else:
-                logger.info("Attendance not marked for %s: %s (%s)", student_id, res.status, res.message)
+                await db.rollback()
+                logger.info(
+                    "Attendance not marked for %s: %s (%s)",
+                    student_id,
+                    res.status,
+                    res.message,
+                )
+                return False
+
     except Exception as exc:
-        logger.error("Failed to record attendance for %s in %s: %s", student_id, session_id, exc)
+        logger.error(
+            "Failed to record attendance for %s in %s: %s",
+            student_id,
+            session_id,
+            exc,
+        )
+        return False
 
 
 
@@ -161,9 +187,15 @@ def main() -> None:
     print(f"  - Headless Mode       : {args.headless}")
     print("=" * 75 + "\n")
 
-    # Step 1: Initialize Pipeline
+    # Step 1: Create one event loop for all asynchronous database operations
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Step 2: Initialize Pipeline
     print("[1] Initializing Biometric Models and FAISS Index...")
-    pipeline = asyncio.run(init_pipeline(args.interval, args.threshold))
+    pipeline = loop.run_until_complete(
+        init_pipeline(args.interval, args.threshold)
+    )
 
     # Step 2: Initialize Video Capture
     source = args.video if args.video else args.camera
@@ -172,6 +204,9 @@ def main() -> None:
 
     if not capture.open():
         print(f"[ERROR] Could not open video source: {source}")
+        loop.run_until_complete(async_engine.dispose())
+        loop.close()
+        asyncio.set_event_loop(None)
         sys.exit(1)
 
     print("\n[3] Camera Stream Running. Press 'q' or ESC in display window (or Ctrl+C) to quit.\n")
@@ -185,6 +220,7 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, handle_signal)
 
+    marked_student_ids = set()
     frame_num = 0
     window_name = "Facial Recognition Attendance System"
 
@@ -227,22 +263,37 @@ def main() -> None:
                 )
 
             # If attendance session is configured, record attendance for confirmed recognitions
+            # Record attendance for confirmed recognitions
             if args.attendance_session and result.temporal_states:
                 for s in result.temporal_states:
-                    if s:
-                        if s.is_spoof:
-                            print(f"\n>>> [ANTI-SPOOF ALERT] Track #{s.track_id} flagged as SPOOF ({s.liveness_reason}) - Attendance blocked! <<<\n")
-                        elif getattr(s, "confirmed_student_id", None):
-                            asyncio.run(
+                    if not s:
+                        continue
+
+                    if s.is_spoof:
+                        print(
+                            f"\n>>> [ANTI-SPOOF ALERT] Track #{s.track_id} "
+                            f"flagged as SPOOF ({s.liveness_reason}) "
+                            f"- Attendance blocked! <<<\n"
+                        )
+
+                    elif getattr(s, "confirmed_student_id", None):
+                        student_id = s.confirmed_student_id
+
+                        # Process each student only once during this camera run
+                        if student_id not in marked_student_ids:
+                            saved = loop.run_until_complete(
                                 record_attendance_event(
                                     session_id=args.attendance_session,
-                                    student_id=s.confirmed_student_id,
+                                    student_id=student_id,
                                     similarity=s.confidence_score,
                                     obs_count=s.total_observations,
                                     is_live=s.is_live,
                                     liveness_score=s.liveness_score,
                                 )
                             )
+
+                            if saved:
+                                marked_student_ids.add(student_id)
 
             if args.max_frames and frame_num >= args.max_frames:
                 print(f"[i] Reached max frames limit ({args.max_frames}). Stopping.")
@@ -251,11 +302,19 @@ def main() -> None:
 
     finally:
         print("\n[4] Releasing camera resources and closing windows...")
+
         capture.release()
+
         try:
             cv2.destroyAllWindows()
         except Exception:
             pass
+
+        # Close database connections using the same event loop
+        loop.run_until_complete(async_engine.dispose())
+        loop.close()
+        asyncio.set_event_loop(None)
+
         print("[+] Camera recognition pipeline terminated cleanly.\n")
 
 
