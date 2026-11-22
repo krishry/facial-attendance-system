@@ -53,10 +53,34 @@ class Settings(BaseSettings):
     def async_database_uri(self) -> str:
         if self.DATABASE_URL:
             url = self.DATABASE_URL
+
             if url.startswith("postgresql://"):
-                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+                url = url.replace(
+                    "postgresql://",
+                    "postgresql+asyncpg://",
+                    1,
+                )
             elif url.startswith("postgresql+psycopg2://"):
-                url = url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+                url = url.replace(
+                    "postgresql+psycopg2://",
+                    "postgresql+asyncpg://",
+                    1,
+                )
+
+            if "?" in url:
+                base, query = url.split("?", 1)
+                params = [
+                    item for item in query.split("&")
+                    if not item.startswith("channel_binding=")
+                ]
+                params = [
+                    "ssl=" + item[len("sslmode="):]
+                    if item.startswith("sslmode=")
+                    else item
+                    for item in params
+                ]
+                url = base + ("?" + "&".join(params) if params else "")
+
             return url
 
         return URL.create(
