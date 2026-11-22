@@ -1,5 +1,6 @@
 """Application configuration management using Pydantic Settings."""
 
+from sqlalchemy.engine import URL
 from functools import lru_cache
 from typing import List, Optional
 from pydantic import computed_field
@@ -50,19 +51,26 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def async_database_uri(self) -> str:
-        """Construct or return the asynchronous PostgreSQL connection URI."""
         if self.DATABASE_URL:
             url = self.DATABASE_URL
             if url.startswith("postgresql://"):
                 url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            elif url.startswith("postgresql+psycopg2://"):
+                url = url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
             return url
-        auth = f"{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}" if self.POSTGRES_PASSWORD else self.POSTGRES_USER
-        return f"postgresql+asyncpg://{auth}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+        return URL.create(
+            drivername="postgresql+asyncpg",
+            username=self.POSTGRES_USER,
+            password=self.POSTGRES_PASSWORD,
+            host=self.POSTGRES_SERVER,
+            port=self.POSTGRES_PORT,
+            database=self.POSTGRES_DB,
+        ).render_as_string(hide_password=False)
 
     @computed_field
     @property
     def sync_database_uri(self) -> str:
-        """Construct or return the synchronous PostgreSQL connection URI."""
         if self.DATABASE_URL:
             url = self.DATABASE_URL
             if url.startswith("postgresql+asyncpg://"):
@@ -70,8 +78,16 @@ class Settings(BaseSettings):
             elif url.startswith("postgresql://"):
                 url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
             return url
-        auth = f"{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}" if self.POSTGRES_PASSWORD else self.POSTGRES_USER
-        return f"postgresql+psycopg2://{auth}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+        return URL.create(
+            drivername="postgresql+psycopg2",
+            username=self.POSTGRES_USER,
+            password=self.POSTGRES_PASSWORD,
+            host=self.POSTGRES_SERVER,
+            port=self.POSTGRES_PORT,
+            database=self.POSTGRES_DB,
+        ).render_as_string(hide_password=False)
+
 
     # Biometric / ML Configuration (InsightFace: SCRFD + ArcFace)
     INSIGHTFACE_MODEL_NAME: str = "buffalo_sc"
