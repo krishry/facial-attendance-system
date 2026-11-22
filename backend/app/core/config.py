@@ -91,6 +91,7 @@ class Settings(BaseSettings):
 
     # Biometric / ML Configuration (InsightFace: SCRFD + ArcFace)
     INSIGHTFACE_MODEL_NAME: str = "buffalo_sc"
+    INSIGHTFACE_ROOT: str = "~/.insightface"
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.60
     DETECTION_INPUT_SIZE: int = 640
     USE_GPU: bool = True

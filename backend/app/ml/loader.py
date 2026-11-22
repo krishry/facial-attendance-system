@@ -1,5 +1,6 @@
 """Pretrained InsightFace model loader and singleton management."""
 
+import os
 import logging
 import threading
 from typing import List, Optional
@@ -74,6 +75,7 @@ class InsightFaceModelLoader:
                 # Initialize model loading only detection and recognition modules
                 app = FaceAnalysis(
                     name=target_model,
+                    root=os.path.expanduser(settings.INSIGHTFACE_ROOT),
                     providers=providers,
                     allowed_modules=["detection", "recognition"],
                 )
