@@ -4,6 +4,7 @@ from app.db.base import Base
 from app.db.models.student import Student
 from app.db.models.face_embedding import FaceEmbedding
 from app.db.models.attendance import Attendance
+from app.db.models.attendance_session import AttendanceSession
 from app.db.session import (
     async_engine,
     sync_engine,
@@ -40,4 +41,5 @@ __all__ = [
     "DuplicateRecordError",
     "DuplicateAttendanceError",
     "RecordNotFoundError",
+    "AttendanceSession",
 ]
